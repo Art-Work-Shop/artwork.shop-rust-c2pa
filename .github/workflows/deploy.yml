@@ -97,7 +97,7 @@ jobs:
           t = p.read_text(encoding="utf-8")
           import re
           t = re.sub(
-            r'image\\s*=\\s*\"ghcr.io/.+?/artwork-c2pa-rust-signer@sha256:[^\"]+\"',
+            r'(?m)^image\\s*=\\s*\".*\"$',
             f'image = \"ghcr.io/${{ github.repository_owner }}/artwork-c2pa-rust-signer@${{ needs.build-and-push.outputs.image_digest }}\"',
             t
           )

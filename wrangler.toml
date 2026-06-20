@@ -3,6 +3,9 @@ main = "worker.js"
 compatibility_date = "2026-06-20"
 workers_dev = true
 
+[alias]
+"@cloudflare/containers" = "./node_modules/@cloudflare/containers/dist/index.js"
+
 [observability]
 enabled = true
 head_sampling_rate = 1
@@ -16,7 +19,6 @@ class_name = "RustSignerContainerV2"
 image = "ghcr.io/YOUR_GH_ORG_OR_USERNAME/artwork-c2pa-rust-signer@sha256:REPLACE_WITH_DIGEST"
 max_instances = 1
 instance_type = { vcpu = 2, memory_mib = 6144 }
-idle_timeout_seconds = "30s"
 
 [durable_objects]
 bindings = [
