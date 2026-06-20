@@ -1,0 +1,15 @@
+{
+  "name": "artwork.shop-rust-c2pa",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.0.11"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

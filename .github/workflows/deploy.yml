@@ -1,0 +1,108 @@
+name: Build and Deploy Rust C2PA Signer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - "rust-http-signer/**"
+      - "worker.js"
+      - "rust-signer-container.js"
+      - "wrangler.toml"
+      - ".github/workflows/deploy.yml"
+
+concurrency:
+  group: rust-c2pa-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_digest: ${{ steps.push.outputs.digest }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust-http-signer -> rust-http-signer/target
+
+      - name: Build rust binary
+        working-directory: rust-http-signer
+        run: |
+          cargo build --release --target x86_64-unknown-linux-gnu
+          strip target/x86_64-unknown-linux-gnu/release/artwork-c2pa-rust-http-signer || true
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/artwork-c2pa-rust-signer
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - id: push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: rust-http-signer/Dockerfile
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            SIGNER_GIT_SHA=${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm install --no-audit --no-fund
+
+      - name: Pin image digest into wrangler.toml
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("wrangler.toml")
+          t = p.read_text(encoding="utf-8")
+          import re
+          t = re.sub(
+            r'image\\s*=\\s*\"ghcr.io/.+?/artwork-c2pa-rust-signer@sha256:[^\"]+\"',
+            f'image = \"ghcr.io/${{ github.repository_owner }}/artwork-c2pa-rust-signer@${{ needs.build-and-push.outputs.image_digest }}\"',
+            t
+          )
+          p.write_text(t, encoding="utf-8")
+          PY
+
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.toml
