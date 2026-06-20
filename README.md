@@ -24,7 +24,7 @@ SVG is the preferred preview format for text-based look-inside samples. It works
 
 ## Public scope
 
-This repo is public, but it is not the source of truth for the full C2PA topology. The main PWA worker in `artwork.shop-main` keeps policy, routing, TSA drain, and the broader orchestration vars.
+This repo is public, but it is not the source of truth for the full C2PA topology. The main PWA worker in `artwork.shop-pwa` keeps policy, routing, TSA drain, and the broader orchestration vars.
 
 Keep this repo limited to the signer service itself and its deployment wiring.
 
