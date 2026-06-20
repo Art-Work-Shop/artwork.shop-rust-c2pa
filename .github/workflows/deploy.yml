@@ -34,12 +34,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
-            rust-http-signer -> rust-http-signer/target
+            . -> target
 
       - name: Build rust binary
-        working-directory: rust-http-signer
         run: |
-          cargo build --release --target x86_64-unknown-linux-gnu
+          cargo build --manifest-path rust-http-signer/Cargo.toml --release --target x86_64-unknown-linux-gnu
           strip target/x86_64-unknown-linux-gnu/release/artwork-c2pa-rust-http-signer || true
 
       - uses: docker/login-action@v3
