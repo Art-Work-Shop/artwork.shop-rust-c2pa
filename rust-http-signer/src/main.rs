@@ -1029,6 +1029,7 @@ fn normalize_supported_image_mime(mime: &str) -> Option<&'static str> {
     match normalized.as_str() {
         "image/jpeg" | "image/jpg" => Some("image/jpeg"),
         "image/webp" => Some("image/webp"),
+        "image/svg+xml" | "image/svg" => Some("image/svg+xml"),
         "video/mp4" | "application/mp4" => Some("video/mp4"),
         "audio/mpeg" | "audio/mp3" | "audio/x-mp3" | "audio/x-mpeg" => Some("audio/mpeg"),
         _ => None,
@@ -1040,7 +1041,7 @@ fn require_supported_image_mime(mime: &str) -> Result<&'static str, HttpError> {
         HttpError::new(
             StatusCode::BAD_REQUEST,
             format!(
-                "Unsupported source content type {mime:?}. Supported formats are image/jpeg, image/webp, video/mp4, and audio/mpeg."
+                "Unsupported source content type {mime:?}. Supported formats are image/jpeg, image/webp, image/svg+xml, video/mp4, and audio/mpeg."
             ),
         )
     })
@@ -2104,6 +2105,14 @@ mod tests {
             .expect("embedded webp fixture must decode")
     }
 
+    fn minimal_valid_svg_bytes() -> Vec<u8> {
+                br##"<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120" viewBox="0 0 320 120">
+    <rect width="320" height="120" fill="#ffffff"/>
+    <text x="24" y="68" font-size="28" font-family="sans-serif" fill="#111111">Look inside sample</text>
+</svg>"##
+            .to_vec()
+    }
+
     fn minimal_valid_mp4_bytes() -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&24u32.to_be_bytes());
@@ -2167,6 +2176,7 @@ mod tests {
         assert_eq!(normalize_supported_image_mime("image/jpeg"), Some("image/jpeg"));
         assert_eq!(normalize_supported_image_mime("image/jpg"), Some("image/jpeg"));
         assert_eq!(normalize_supported_image_mime("image/webp"), Some("image/webp"));
+        assert_eq!(normalize_supported_image_mime("image/svg+xml"), Some("image/svg+xml"));
         assert_eq!(normalize_supported_image_mime("video/mp4"), Some("video/mp4"));
         assert_eq!(normalize_supported_image_mime("application/mp4"), Some("video/mp4"));
         assert_eq!(normalize_supported_image_mime("audio/mpeg"), Some("audio/mpeg"));
@@ -2174,6 +2184,39 @@ mod tests {
         assert_eq!(normalize_supported_image_mime("image/png"), None);
         assert!(require_supported_image_mime("image/webp").is_ok());
         assert!(require_supported_image_mime("image/png").is_err());
+    }
+
+    #[test]
+    fn builder_sign_svg_validates() {
+        let signer_material = generated_signer_material();
+        let manifest_def = minimal_manifest_definition();
+        let svg_bytes = minimal_valid_svg_bytes();
+
+        let signer_impl = c2pa::create_signer::from_keys(
+            signer_material.cert_pem.as_bytes(),
+            signer_material.key_pem.as_bytes(),
+            c2pa::SigningAlg::Es256,
+            None,
+        )
+        .expect("from_keys must succeed with generated conformant certificate chain");
+
+        let mut builder = c2pa::Builder::from_json(&manifest_def.to_string())
+            .expect("builder from manifest must succeed");
+
+        let mut src = Cursor::new(svg_bytes.as_slice());
+        let mut dst = Cursor::new(Vec::<u8>::new());
+        builder
+            .sign(&*signer_impl, "image/svg+xml", &mut src, &mut dst)
+            .expect("signing svg with direct from_keys signer must succeed");
+
+        let signed_bytes = dst.into_inner();
+        assert!(!signed_bytes.is_empty(), "signed svg output must not be empty");
+
+        assert_reader_validation_valid(
+            &signed_bytes,
+            "image/svg+xml",
+            "Builder::sign must produce a locally verifiable svg asset",
+        );
     }
 
     #[test]

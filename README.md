@@ -10,6 +10,18 @@ Public Rust signer repo for the Cloudflare container deployment.
 - `wrangler.toml` Container deployment config
 - `.github/workflows/deploy.yml` Build and deploy pipeline
 
+## Supported formats
+
+The signer currently accepts these asset types:
+
+- `image/jpeg`
+- `image/webp`
+- `image/svg+xml`
+- `video/mp4`
+- `audio/mpeg`
+
+SVG is the preferred preview format for text-based look-inside samples. It works well for short readable excerpts because the preview can stay web-native while the purchased product remains a separately signed final asset.
+
 ## Public scope
 
 This repo is public, but it is not the source of truth for the full C2PA topology. The main PWA worker in `artwork.shop-main` keeps policy, routing, TSA drain, and the broader orchestration vars.
