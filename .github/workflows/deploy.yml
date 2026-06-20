@@ -42,7 +42,7 @@ jobs:
 
       - name: Build rust binary
         run: |
-          cargo build --manifest-path rust-http-signer/Cargo.toml --release --target x86_64-unknown-linux-gnu
+          cargo build --manifest-path rust-http-signer/Cargo.toml --release --target x86_64-unknown-linux-gnu --target-dir target
           strip target/x86_64-unknown-linux-gnu/release/artwork-c2pa-rust-http-signer || true
 
       - uses: docker/login-action@v3

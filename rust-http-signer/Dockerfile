@@ -14,6 +14,8 @@ ARG SIGNER_GIT_SHA=unknown
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 
+ARG SIGNER_GIT_SHA=unknown
+
 WORKDIR /app
 
 COPY target/x86_64-unknown-linux-gnu/release/artwork-c2pa-rust-http-signer /app/artwork-c2pa-rust-http-signer
