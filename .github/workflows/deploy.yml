@@ -16,13 +16,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-push:
+  deploy:
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       contents: read
-      packages: write
-    outputs:
-      image_digest: ${{ steps.push.outputs.digest }}
 
     steps:
       - uses: actions/checkout@v4
@@ -36,52 +34,10 @@ jobs:
           workspaces: |
             . -> target
 
-      - uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker-container
-
       - name: Build rust binary
         run: |
           cargo build --manifest-path rust-http-signer/Cargo.toml --release --target x86_64-unknown-linux-gnu --target-dir target
           strip target/x86_64-unknown-linux-gnu/release/artwork-c2pa-rust-http-signer || true
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/artwork-c2pa-rust-signer
-          tags: |
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - id: push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: rust-http-signer/Dockerfile
-          push: true
-          platforms: linux/amd64
-          build-args: |
-            SIGNER_GIT_SHA=${{ github.sha }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  deploy:
-    runs-on: ubuntu-latest
-    environment: production
-    needs: build-and-push
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
@@ -89,21 +45,6 @@ jobs:
 
       - name: Install deps
         run: npm install --no-audit --no-fund
-
-      - name: Pin image digest into wrangler.toml
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path("wrangler.toml")
-          t = p.read_text(encoding="utf-8")
-          import re
-          t = re.sub(
-            r'(?m)^image\\s*=\\s*\".*\"$',
-            f'image = \"ghcr.io/${{ github.repository_owner }}/artwork-c2pa-rust-signer@${{ needs.build-and-push.outputs.image_digest }}\"',
-            t
-          )
-          p.write_text(t, encoding="utf-8")
-          PY
 
       - name: Deploy with Wrangler
         env:

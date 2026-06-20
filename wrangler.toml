@@ -16,7 +16,8 @@ C2PA_SIGNER_SELF_TEST_IMAGE_URL = "https://httpbin.org/image/jpeg"
 
 [[containers]]
 class_name = "RustSignerContainerV2"
-image = "ghcr.io/YOUR_GH_ORG_OR_USERNAME/artwork-c2pa-rust-signer@sha256:REPLACE_WITH_DIGEST"
+image = "./rust-http-signer/Dockerfile"
+image_build_context = "."
 max_instances = 1
 instance_type = { vcpu = 2, memory_mib = 6144 }
 
