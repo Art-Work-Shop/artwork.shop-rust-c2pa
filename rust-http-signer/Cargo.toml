@@ -18,6 +18,7 @@ rcgen = { version = "0.13", features = ["pem"] }
 p256 = "0.13"
 x509-parser = "0.17"
 ciborium = "0.2"
+base64 = "0.22"
 
 # Keep parity target aligned with current divergence investigation lane.
 c2pa = { version = "0.82", default-features = false, features = ["rust_native_crypto"] }

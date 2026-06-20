@@ -121,6 +121,7 @@ name = "artwork-c2pa-rust-http-signer"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "c2pa",
  "ciborium",
  "hex",

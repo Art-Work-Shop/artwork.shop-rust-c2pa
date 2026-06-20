@@ -339,7 +339,7 @@ struct SignatureForensics {
     verifier_view: Option<SignatureForensicsVerifierView>,
 }
 
-static DEFAULT_SELF_TEST_IMAGE_URL: Lazy<String> = Lazy::new(|| "https://httpbin.org/image/jpeg".to_string());
+static DEFAULT_SELF_TEST_IMAGE_URL: Lazy<String> = Lazy::new(|| "https://httpbin.org/image/webp".to_string());
 
 fn read_env_bool(name: &str, default: bool) -> bool {
     std::env::var(name)
@@ -1018,6 +1018,34 @@ async fn fetch_source_image_bytes(
     Ok((bytes.to_vec(), mime))
 }
 
+fn normalize_supported_image_mime(mime: &str) -> Option<&'static str> {
+    let normalized = mime
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+
+    match normalized.as_str() {
+        "image/jpeg" | "image/jpg" => Some("image/jpeg"),
+        "image/webp" => Some("image/webp"),
+        "video/mp4" | "application/mp4" => Some("video/mp4"),
+        "audio/mpeg" | "audio/mp3" | "audio/x-mp3" | "audio/x-mpeg" => Some("audio/mpeg"),
+        _ => None,
+    }
+}
+
+fn require_supported_image_mime(mime: &str) -> Result<&'static str, HttpError> {
+    normalize_supported_image_mime(mime).ok_or_else(|| {
+        HttpError::new(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Unsupported source content type {mime:?}. Supported formats are image/jpeg, image/webp, video/mp4, and audio/mpeg."
+            ),
+        )
+    })
+}
+
 fn build_manifest_definition(
     request_manifest: Option<Value>,
     manifest_guid: &str,
@@ -1157,8 +1185,9 @@ fn build_signer_set_assertion(manifest_guid: &str, signer: &SignerMaterial) -> V
     })
 }
 
-fn sign_jpeg(
+fn sign_image(
     source_bytes: &[u8],
+    source_mime: &str,
     manifest_definition: &Value,
     signer: &SignerMaterial,
 ) -> Result<Vec<u8>, HttpError> {
@@ -1179,7 +1208,7 @@ fn sign_jpeg(
     let mut destination = Cursor::new(Vec::<u8>::new());
 
     builder
-        .sign(&signer_impl, "image/jpeg", &mut source, &mut destination)
+        .sign(&signer_impl, source_mime, &mut source, &mut destination)
         .map_err(|error| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Signing failed: {}", error)))?;
 
     let output = destination.into_inner();
@@ -1194,13 +1223,13 @@ fn sign_jpeg(
     if !read_env_bool("C2PA_SIGNER_SKIP_SELF_VERIFY", false) {
         // Forensics assertion: signer output must be verifiable by local c2pa reader.
         // If this fails, signing credentials/config are not internally coherent.
-        assert_signer_self_verification(&output)?;
+        assert_signer_self_verification(&output, source_mime)?;
     }
 
     Ok(output)
 }
 
-fn assert_signer_self_verification(signed_bytes: &[u8]) -> Result<(), HttpError> {
+fn assert_signer_self_verification(signed_bytes: &[u8], source_mime: &str) -> Result<(), HttpError> {
     let ignore_cert_profile = read_env_bool("C2PA_SIGNER_SELF_VERIFY_IGNORE_CERT_PROFILE", false);
     let verify_after_reading = read_env_bool("C2PA_SIGNER_VERIFY_AFTER_READING", true) && !ignore_cert_profile;
 
@@ -1223,10 +1252,10 @@ fn assert_signer_self_verification(signed_bytes: &[u8]) -> Result<(), HttpError>
         .map_err(|error| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Self-verify context failed: {}", error)))?;
 
     let reader = c2pa::Reader::from_context(context)
-        .with_stream("image/jpeg", &mut stream)
+        .with_stream(source_mime, &mut stream)
         .map_err(|error| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Self-verify read failed: {}", error)))?;
 
-    capture_verifier_forensics(&reader, signed_bytes);
+    capture_verifier_forensics(&reader, signed_bytes, source_mime);
 
     if ignore_cert_profile {
         return Ok(());
@@ -1304,7 +1333,7 @@ fn capture_signer_input_forensics(tbs_bytes: &[u8]) {
     });
 }
 
-fn capture_verifier_forensics(reader: &c2pa::Reader, signed_bytes: &[u8]) {
+fn capture_verifier_forensics(reader: &c2pa::Reader, signed_bytes: &[u8], source_mime: &str) {
     let mut view = SignatureForensicsVerifierView {
         validation_state: Some(format!("{:?}", reader.validation_state())),
         manifest_label: reader.active_label().map(str::to_string),
@@ -1345,7 +1374,7 @@ fn capture_verifier_forensics(reader: &c2pa::Reader, signed_bytes: &[u8]) {
     uri_samples.dedup();
     view.uri_samples = uri_samples;
 
-    if let Some(store_blob) = extract_manifest_store_blob(signed_bytes) {
+    if let Some(store_blob) = extract_manifest_store_blob(signed_bytes, source_mime) {
         view.manifest_store_blob_len = Some(store_blob.len());
         view.manifest_store_blob_sha256 = Some(sha256_hex(&store_blob));
         view.manifest_store_blob_hex = Some(hex::encode(&store_blob));
@@ -1400,8 +1429,8 @@ fn find_subsequence_offsets(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
     offsets
 }
 
-fn extract_manifest_store_blob(signed_bytes: &[u8]) -> Option<Vec<u8>> {
-    c2pa::jumbf_io::load_jumbf_from_memory("image/jpeg", signed_bytes).ok()
+fn extract_manifest_store_blob(signed_bytes: &[u8], source_mime: &str) -> Option<Vec<u8>> {
+    c2pa::jumbf_io::load_jumbf_from_memory(source_mime, signed_bytes).ok()
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -1410,7 +1439,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn verify_signed_bytes(signed_bytes: &[u8]) -> Result<PostSignVerification, HttpError> {
+fn verify_signed_bytes(signed_bytes: &[u8], source_mime: &str) -> Result<PostSignVerification, HttpError> {
     let mut stream = Cursor::new(signed_bytes.to_vec());
     let verify_after_reading = read_env_bool("C2PA_SIGNER_VERIFY_AFTER_READING", true);
     let verify_settings = format!(
@@ -1431,7 +1460,7 @@ fn verify_signed_bytes(signed_bytes: &[u8]) -> Result<PostSignVerification, Http
         .map_err(|error| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Verification context failed: {}", error)))?;
 
     let reader = c2pa::Reader::from_context(context)
-        .with_stream("image/jpeg", &mut stream)
+        .with_stream(source_mime, &mut stream)
         .map_err(|error| HttpError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Post-sign verify failed: {}", error)))?;
 
     let validation_state_enum = reader.validation_state();
@@ -1677,7 +1706,8 @@ async fn self_test(
     require_auth(&headers, &state.config)?;
 
     let start = std::time::Instant::now();
-    let (source_bytes, _mime) = fetch_source_image_bytes(&state, &state.config.self_test_image_url).await?;
+    let (source_bytes, source_mime_raw) = fetch_source_image_bytes(&state, &state.config.self_test_image_url).await?;
+    let source_mime = require_supported_image_mime(&source_mime_raw)?;
 
     let manifest_definition = json!({
         "claim_generator": "artwork.shop/1.0",
@@ -1701,9 +1731,9 @@ async fn self_test(
         &state.signer,
     );
 
-    let signed = sign_jpeg(&source_bytes, &manifest_definition, &state.signer)?;
+    let signed = sign_image(&source_bytes, source_mime, &manifest_definition, &state.signer)?;
     let _digest = sha256_hex(&signed);
-    let verify = verify_signed_bytes(&signed)?;
+    let verify = verify_signed_bytes(&signed, source_mime)?;
 
     Ok(Json(SelfTestResponse {
         success: verify.validation_state != "Invalid",
@@ -1742,10 +1772,11 @@ async fn sign(
         .map(str::to_string)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let (source_bytes, source_mime) = fetch_source_image_bytes(&state, source_image_url).await?;
+    let (source_bytes, source_mime_raw) = fetch_source_image_bytes(&state, source_image_url).await?;
+    let source_mime = require_supported_image_mime(&source_mime_raw)?;
     let manifest_definition = build_manifest_definition(payload.manifest, &manifest_guid, &state.signer);
-    let signed_bytes = sign_jpeg(&source_bytes, &manifest_definition, &state.signer)?;
-    let verify = verify_signed_bytes(&signed_bytes)?;
+    let signed_bytes = sign_image(&source_bytes, source_mime, &manifest_definition, &state.signer)?;
+    let verify = verify_signed_bytes(&signed_bytes, source_mime)?;
     let signed_sha = sha256_hex(&signed_bytes);
 
     let gate_mode = if state.config.fail_open_post_sign_verify {
@@ -1779,8 +1810,7 @@ async fn sign(
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_str(if source_mime.starts_with("image/") { &source_mime } else { "image/jpeg" })
-            .unwrap_or_else(|_| HeaderValue::from_static("image/jpeg")),
+        HeaderValue::from_static(source_mime),
     );
     headers.insert(
         HeaderNameExt::manifest_guid(),
@@ -1842,11 +1872,12 @@ impl HeaderNameExt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
     use c2pa::HashRange;
     use ciborium::Value as CborValue;
     use p256::ecdsa::signature::Verifier;
     use std::io::{Cursor, Seek, SeekFrom, Write};
-    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone, Debug)]
@@ -2033,16 +2064,19 @@ mod tests {
         serde_json::from_str::<Value>(&text).expect("fixture must be valid json")
     }
 
-    fn fixture_path(relative: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)
-    }
-
     fn generated_signer_material() -> SignerMaterial {
+        let chain = generate_c2pa_cert_chain(
+            "artwork.shop test signer",
+            "artwork.shop",
+            "US",
+            (2026, 5, 4),
+            (2028, 5, 4),
+        )
+        .expect("generated signer chain should build");
+
         SignerMaterial {
-            cert_pem: std::fs::read_to_string(fixture_path("fixtures/certs/generated/cert-chain.pem"))
-                .expect("generated cert chain fixture should load"),
-            key_pem: std::fs::read_to_string(fixture_path("fixtures/certs/generated/leaf-key.pem"))
-                .expect("generated leaf key fixture should load"),
+            cert_pem: chain.chain_pem,
+            key_pem: chain.leaf_key_pem,
             credential_source: "test-generated".to_string(),
         }
     }
@@ -2064,27 +2098,28 @@ mod tests {
         })
     }
 
-    fn minimal_valid_jpeg_bytes() -> Vec<u8> {
+    fn minimal_valid_webp_bytes() -> Vec<u8> {
+        STANDARD
+            .decode("UklGRiIAAABXRUJQVlA4TAYAAAAvAAAAAAfQ//73v/+BiOh/AAA=")
+            .expect("embedded webp fixture must decode")
+    }
+
+    fn minimal_valid_mp4_bytes() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&24u32.to_be_bytes());
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(b"isom");
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(b"isomiso2");
+        bytes.extend_from_slice(&12u32.to_be_bytes());
+        bytes.extend_from_slice(b"mdat");
+        bytes.extend_from_slice(&[0u8; 4]);
+        bytes
+    }
+
+    fn minimal_valid_mp3_bytes() -> Vec<u8> {
         vec![
-            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F',
-            0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
-            0xFF, 0xDB, 0x00, 0x43, 0x00,
-            0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07,
-            0x09, 0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B,
-            0x0C, 0x19, 0x12, 0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E,
-            0x1D, 0x1A, 0x1C, 0x1C, 0x20, 0x24, 0x2E, 0x27, 0x20, 0x22,
-            0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29, 0x2C, 0x30, 0x31,
-            0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32, 0x3C,
-            0x2E, 0x33, 0x34, 0x32,
-            0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01,
-            0x01, 0x11, 0x00,
-            0xFF, 0xC4, 0x00, 0x1F, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01,
-            0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-            0x09, 0x0A, 0x0B,
-            0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00,
-            0xFB, 0xD4,
-            0xFF, 0xD9,
+            0xff, 0xfb, 0x90, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ]
     }
 
@@ -2104,10 +2139,10 @@ mod tests {
             .expect("verification context must build")
     }
 
-    fn assert_reader_validation_valid(signed_bytes: &[u8], message: &str) {
+    fn assert_reader_validation_valid(signed_bytes: &[u8], mime: &str, message: &str) {
         let mut reader_src = Cursor::new(signed_bytes);
         let reader = c2pa::Reader::from_context(verify_context())
-            .with_stream("image/jpeg", &mut reader_src)
+            .with_stream(mime, &mut reader_src)
             .expect("reader must open signed bytes");
 
         let raw = reader.json();
@@ -2125,6 +2160,92 @@ mod tests {
 
     fn first_bytes_hex(data: &[u8], count: usize) -> String {
         hex::encode(&data[..data.len().min(count)])
+    }
+
+    #[test]
+    fn supported_image_mime_gate_accepts_jpeg_and_webp() {
+        assert_eq!(normalize_supported_image_mime("image/jpeg"), Some("image/jpeg"));
+        assert_eq!(normalize_supported_image_mime("image/jpg"), Some("image/jpeg"));
+        assert_eq!(normalize_supported_image_mime("image/webp"), Some("image/webp"));
+        assert_eq!(normalize_supported_image_mime("video/mp4"), Some("video/mp4"));
+        assert_eq!(normalize_supported_image_mime("application/mp4"), Some("video/mp4"));
+        assert_eq!(normalize_supported_image_mime("audio/mpeg"), Some("audio/mpeg"));
+        assert_eq!(normalize_supported_image_mime("audio/mp3"), Some("audio/mpeg"));
+        assert_eq!(normalize_supported_image_mime("image/png"), None);
+        assert!(require_supported_image_mime("image/webp").is_ok());
+        assert!(require_supported_image_mime("image/png").is_err());
+    }
+
+    #[test]
+    fn builder_sign_video_mp4_validates() {
+        let signer_material = generated_signer_material();
+        let manifest_def = minimal_manifest_definition();
+        let mp4_bytes = minimal_valid_mp4_bytes();
+
+        let signer_impl = c2pa::create_signer::from_keys(
+            signer_material.cert_pem.as_bytes(),
+            signer_material.key_pem.as_bytes(),
+            c2pa::SigningAlg::Es256,
+            None,
+        )
+        .expect("from_keys must succeed with generated conformant certificate chain");
+
+        let mut builder = c2pa::Builder::from_json(&manifest_def.to_string())
+            .expect("builder from manifest must succeed");
+
+        let mut src = Cursor::new(mp4_bytes.as_slice());
+        let mut dst = Cursor::new(Vec::<u8>::new());
+        builder
+            .sign(&*signer_impl, "video/mp4", &mut src, &mut dst)
+            .expect("signing mp4 with direct from_keys signer must succeed");
+
+        let signed_bytes = dst.into_inner();
+        assert!(!signed_bytes.is_empty(), "signed mp4 output must not be empty");
+
+        assert_reader_validation_valid(
+            &signed_bytes,
+            "video/mp4",
+            "Builder::sign must produce a locally verifiable mp4 asset",
+        );
+    }
+
+    #[test]
+    fn builder_sign_audio_mp3_validates() {
+        let signer_material = generated_signer_material();
+        let manifest_def = minimal_manifest_definition();
+        let mp3_bytes = minimal_valid_mp3_bytes();
+
+        let signer_impl = c2pa::create_signer::from_keys(
+            signer_material.cert_pem.as_bytes(),
+            signer_material.key_pem.as_bytes(),
+            c2pa::SigningAlg::Es256,
+            None,
+        )
+        .expect("from_keys must succeed with generated conformant certificate chain");
+
+        let mut builder = c2pa::Builder::from_json(&manifest_def.to_string())
+            .expect("builder from manifest must succeed");
+
+        let mut src = Cursor::new(mp3_bytes.as_slice());
+        let mut dst = Cursor::new(Vec::<u8>::new());
+        builder
+            .sign(&*signer_impl, "audio/mpeg", &mut src, &mut dst)
+            .expect("signing mp3 with direct from_keys signer must succeed");
+
+        let signed_bytes = dst.into_inner();
+        assert!(!signed_bytes.is_empty(), "signed mp3 output must not be empty");
+
+        assert_reader_validation_valid(
+            &signed_bytes,
+            "audio/mpeg",
+            "Builder::sign must produce a locally verifiable mp3 asset",
+        );
+    }
+
+    #[test]
+    fn epub_support_is_still_blocked_by_the_pinned_c2pa_crate() {
+        assert_eq!(normalize_supported_image_mime("application/epub+zip"), None);
+        assert!(require_supported_image_mime("application/epub+zip").is_err());
     }
 
     #[test]
@@ -2228,7 +2349,7 @@ mod tests {
         // Uses from_keys() directly with NO wrapper to isolate whether wrappers cause mismatch.
         let signer_material = generated_signer_material();
         let manifest_def = minimal_manifest_definition();
-        let jpeg_bytes = minimal_valid_jpeg_bytes();
+        let webp_bytes = minimal_valid_webp_bytes();
 
         let signer_impl = c2pa::create_signer::from_keys(
             signer_material.cert_pem.as_bytes(),
@@ -2241,10 +2362,10 @@ mod tests {
         let mut builder = c2pa::Builder::from_json(&manifest_def.to_string())
             .expect("builder from manifest must succeed");
 
-        let mut src = Cursor::new(jpeg_bytes.as_slice());
+        let mut src = Cursor::new(webp_bytes.as_slice());
         let mut dst = Cursor::new(Vec::<u8>::new());
         builder
-            .sign(&*signer_impl, "image/jpeg", &mut src, &mut dst)
+            .sign(&*signer_impl, "image/webp", &mut src, &mut dst)
             .expect("signing with direct from_keys signer must succeed");
 
         let signed_bytes = dst.into_inner();
@@ -2252,6 +2373,7 @@ mod tests {
 
         assert_reader_validation_valid(
             &signed_bytes,
+            "image/webp",
             "Builder::sign with direct from_keys (no wrapper) must produce a locally verifiable asset",
         );
     }
@@ -2260,7 +2382,7 @@ mod tests {
     fn builder_sign_control_with_generated_chain_validates() {
         let signer_material = generated_signer_material();
         let manifest_def = minimal_manifest_definition();
-        let jpeg_bytes = minimal_valid_jpeg_bytes();
+        let webp_bytes = minimal_valid_webp_bytes();
         let captured_tbs = Arc::new(Mutex::new(Vec::<SniffSnapshot>::new()));
 
         let signer_impl = c2pa::create_signer::from_keys(
@@ -2276,10 +2398,10 @@ mod tests {
         let mut builder = c2pa::Builder::from_json(&manifest_def.to_string())
             .expect("builder from manifest must succeed");
 
-        let mut src = Cursor::new(jpeg_bytes.as_slice());
+        let mut src = Cursor::new(webp_bytes.as_slice());
         let mut dst = Cursor::new(Vec::<u8>::new());
         builder
-            .sign(&signer_impl, "image/jpeg", &mut src, &mut dst)
+            .sign(&signer_impl, "image/webp", &mut src, &mut dst)
             .expect("signing must succeed");
 
         let signed_bytes = dst.into_inner();
@@ -2325,7 +2447,7 @@ mod tests {
 
         let mut reader_src = Cursor::new(signed_bytes.as_slice());
         let reader = c2pa::Reader::from_context(verify_context())
-            .with_stream("image/jpeg", &mut reader_src)
+            .with_stream("image/webp", &mut reader_src)
             .expect("reader must open signed bytes for signature extraction");
         let manifest = reader
             .active_manifest()
@@ -2348,6 +2470,7 @@ mod tests {
 
         assert_reader_validation_valid(
             &signed_bytes,
+            "image/webp",
             "Builder::sign control path must produce a locally verifiable asset",
         );
     }
@@ -2356,7 +2479,7 @@ mod tests {
     fn builder_sign_embeddable_with_generated_chain_validates() {
         let signer_material = generated_signer_material();
         let manifest_def = minimal_manifest_definition();
-        let jpeg_bytes = minimal_valid_jpeg_bytes();
+        let webp_bytes = minimal_valid_webp_bytes();
         let captured_tbs = Arc::new(Mutex::new(Vec::<SniffSnapshot>::new()));
         let signer_impl = c2pa::create_signer::from_keys(
             signer_material.cert_pem.as_bytes(),
@@ -2373,15 +2496,15 @@ mod tests {
             .expect("builder from shared context must succeed");
 
         let composed_placeholder = builder
-            .placeholder("image/jpeg")
+            .placeholder("image/webp")
             .expect("placeholder generation must succeed");
         assert!(!composed_placeholder.is_empty(), "placeholder bytes must not be empty");
 
         let manifest_pos = 2usize;
-        let mut output = Vec::with_capacity(jpeg_bytes.len() + composed_placeholder.len());
-        output.extend_from_slice(&jpeg_bytes[..manifest_pos]);
+        let mut output = Vec::with_capacity(webp_bytes.len() + composed_placeholder.len());
+        output.extend_from_slice(&webp_bytes[..manifest_pos]);
         output.extend_from_slice(&composed_placeholder);
-        output.extend_from_slice(&jpeg_bytes[manifest_pos..]);
+        output.extend_from_slice(&webp_bytes[manifest_pos..]);
 
         let mut output_stream = Cursor::new(output);
         builder
@@ -2394,11 +2517,11 @@ mod tests {
             .seek(SeekFrom::Start(0))
             .expect("placeholder asset rewind must succeed");
         builder
-            .update_hash_from_stream("image/jpeg", &mut output_stream)
+            .update_hash_from_stream("image/webp", &mut output_stream)
             .expect("data hash update must succeed");
 
         let signed_manifest = builder
-            .sign_embeddable("image/jpeg")
+            .sign_embeddable("image/webp")
             .expect("embeddable signing must succeed");
         assert!(
             signed_manifest.len() <= composed_placeholder.len(),
@@ -2424,7 +2547,7 @@ mod tests {
 
         let mut reader_src = Cursor::new(final_asset.as_slice());
         let reader = c2pa::Reader::from_context(verify_context())
-            .with_stream("image/jpeg", &mut reader_src)
+            .with_stream("image/webp", &mut reader_src)
             .expect("reader must open embeddable signed bytes for signature extraction");
         let manifest = reader
             .active_manifest()
@@ -2448,6 +2571,7 @@ mod tests {
 
         assert_reader_validation_valid(
             &final_asset,
+            "image/webp",
             "Builder::sign_embeddable placeholder path must produce a locally verifiable asset",
         );
     }
