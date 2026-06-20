@@ -4,7 +4,7 @@ compatibility_date = "2026-06-20"
 workers_dev = true
 
 [alias]
-"@cloudflare/containers" = "./node_modules/@cloudflare/containers/dist/index.js"
+"@cloudflare/containers" = "./node_modules/@cloudflare/containers/dist/index.mjs"
 
 [observability]
 enabled = true
