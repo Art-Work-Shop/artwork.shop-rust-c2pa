@@ -25,6 +25,40 @@ These are CI/deploy credentials only. They let GitHub Actions push the image to 
 
 These are runtime signer secrets. They must exist in Cloudflare because the container needs them after deploy.
 
+## Existing main PWA worker vars
+
+If these already live in `artwork.shop-main`, keep them there. They are signer-orchestration inputs, not Rust container runtime secrets:
+
+- C2PA_DRAIN_SECRET
+- C2PA_DRAIN_WORKER_URL
+- C2PA_LEGACY_EMBED_FALLBACK
+- C2PA_PROVENANCE_PUBLISH_MODE
+- C2PA_REQUIRED_CREDENTIAL_FORMAT
+- C2PA_SIGNED_DERIVATIVE_FORMATS
+- C2PA_SIGNER_APP_ASSERTIONS_INLINE_MAX_BYTES
+- C2PA_SIGNER_KEY_ID
+- C2PA_SIGNER_MANIFEST_TRANSPORT_PROFILE
+- C2PA_SIGNER_MAX_REQUEST_BYTES
+- C2PA_SIGNER_MODE
+- C2PA_SIGNER_REQUESTED_EMBEDDING_MODE
+- C2PA_SIGNER_SERVICE_URL
+- C2PA_TSA_PROVIDERS_JSON
+
+In other words: the main PWA worker decides policy and routing, and this repo only hosts the signer service behind that contract.
+
+## What the Rust signer needs
+
+The Rust container only needs the signer runtime values below:
+
+- C2PA_SIGNER_SERVICE_TOKEN
+- C2PA_SIGNER_PRIVATE_KEY_PEM
+- C2PA_SIGNER_CERT_CHAIN_PEM
+- C2PA_SIGNER_SELF_TEST_IMAGE_URL
+
+Anything else should stay in the main worker unless the Rust signer code explicitly reads it.
+
+The `C2PA_SIGNER_CREDENTIAL_FORMAT` value in `wrangler.toml` is a compatibility/config marker, not a required runtime secret.
+
 ## Fork setup
 
 1. Fork this repo and open your fork in GitHub Actions.
