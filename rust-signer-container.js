@@ -27,12 +27,39 @@ export class RustSignerContainerV2 extends Container {
      * Requests forwarded via fetch() are routed to this port inside the container.
      */
     defaultPort = CONTAINER_PORT;
+    constructor(ctx, env) {
+        super(ctx, env);
+
+        console.log("RustSignerContainerV2 env presence", {
+            SIGNER_SERVICE_TOKEN: Boolean(env?.SIGNER_SERVICE_TOKEN),
+            C2PA_SIGNER_PRIVATE_KEY_PEM: Boolean(env?.C2PA_SIGNER_PRIVATE_KEY_PEM),
+            C2PA_SIGNER_CERT_CHAIN_PEM: Boolean(env?.C2PA_SIGNER_CERT_CHAIN_PEM),
+            C2PA_SIGNER_SELF_TEST_IMAGE_URL: Boolean(env?.C2PA_SIGNER_SELF_TEST_IMAGE_URL),
+        });
+
+        this.envVars = {
+            SIGNER_SERVICE_TOKEN: env.SIGNER_SERVICE_TOKEN,
+            C2PA_SIGNER_PRIVATE_KEY_PEM: env.C2PA_SIGNER_PRIVATE_KEY_PEM,
+            C2PA_SIGNER_CERT_CHAIN_PEM: env.C2PA_SIGNER_CERT_CHAIN_PEM,
+            C2PA_SIGNER_SELF_TEST_IMAGE_URL: env.C2PA_SIGNER_SELF_TEST_IMAGE_URL,
+        };
+    }
+
+    onStart() {
+        console.log("RustSignerContainerV2 env lengths", {
+            SIGNER_SERVICE_TOKEN: this.envVars?.SIGNER_SERVICE_TOKEN?.length || 0,
+            C2PA_SIGNER_PRIVATE_KEY_PEM: this.envVars?.C2PA_SIGNER_PRIVATE_KEY_PEM?.length || 0,
+            C2PA_SIGNER_CERT_CHAIN_PEM: this.envVars?.C2PA_SIGNER_CERT_CHAIN_PEM?.length || 0,
+            C2PA_SIGNER_SELF_TEST_IMAGE_URL: this.envVars?.C2PA_SIGNER_SELF_TEST_IMAGE_URL?.length || 0,
+        });
+    }
 
     /**
      * Forward the incoming Worker fetch() call to the container process.
      * The Container base class handles port mapping and lifecycle automatically.
      */
     async fetch(request) {
+        await this.startAndWaitForPorts();
         return this.containerFetch(request);
     }
 }

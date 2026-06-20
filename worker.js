@@ -65,6 +65,7 @@ export default {
         if (!stub) {
           return jsonResponse(503, { success: false, message: "RUST_SIGNER binding not configured" }, request);
         }
+        await stub.startAndWaitForPorts();
         return await stub.fetch(request.clone());
       }
 

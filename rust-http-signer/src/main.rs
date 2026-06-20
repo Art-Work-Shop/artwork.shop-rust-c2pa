@@ -469,7 +469,7 @@ fn load_cert_policy_config() -> Result<CertPolicyConfig, Box<dyn std::error::Err
             if configured.is_empty() {
                 vec![
                     "1.3.6.1.5.5.7.3.4".to_string(),
-                    "1.3.6.1.4.1.311.10.3.12".to_string(),
+                    "1.3.6.1.4.1.53913.1.1".to_string(),
                 ]
             } else {
                 configured
@@ -706,7 +706,7 @@ fn signer_git_sha() -> String {
 // Generates a 2-cert chain: Root CA → Leaf signer.
 // The leaf has:
 //   - KU: digitalSignature (critical)
-//   - EKU: emailProtection (1.3.6.1.5.5.7.3.4) + documentSigning (1.3.6.1.4.1.311.10.3.12)
+//   - EKU: emailProtection (1.3.6.1.5.5.7.3.4) + documentSigning (1.3.6.1.4.1.53913.1.1)
 //   - Subject != Issuer (not self-issued)
 //   - is_ca: false
 // These are exactly the requirements the cert policy enforcer checks at startup.
@@ -764,8 +764,8 @@ fn generate_c2pa_cert_chain(
     ];
     leaf_params.extended_key_usages = vec![
         ExtendedKeyUsagePurpose::EmailProtection,         // 1.3.6.1.5.5.7.3.4
-        ExtendedKeyUsagePurpose::Other(                   // documentSigning 1.3.6.1.4.1.311.10.3.12
-            vec![1, 3, 6, 1, 4, 1, 311, 10, 3, 12]
+        ExtendedKeyUsagePurpose::Other(                   // documentSigning 1.3.6.1.4.1.53913.1.1
+            vec![1, 3, 6, 1, 4, 1, 53913, 1, 1]
                 .into_iter()
                 .map(|v: u64| v)
                 .collect::<Vec<_>>()
@@ -832,7 +832,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return cmd_gen_certs();
     }
 
-    let bind_addr = std::env::var("RUST_SIGNER_HTTP_BIND").unwrap_or_else(|_| "127.0.0.1:8789".to_string());
+    eprintln!(
+        "rust-http-signer startup env: token={}, cert_chain={}, cert_pem={}, private_key={}, rotation_policy_file={}",
+        std::env::var("SIGNER_SERVICE_TOKEN").map(|value| !value.trim().is_empty()).unwrap_or(false),
+        std::env::var("C2PA_SIGNER_CERT_CHAIN_PEM").map(|value| !value.trim().is_empty()).unwrap_or(false),
+        std::env::var("C2PA_SIGNER_CERT_PEM").map(|value| !value.trim().is_empty()).unwrap_or(false),
+        std::env::var("C2PA_SIGNER_PRIVATE_KEY_PEM").map(|value| !value.trim().is_empty()).unwrap_or(false),
+        std::env::var("C2PA_SIGNER_ROTATION_POLICY_FILE").ok().filter(|value| !value.trim().is_empty()).is_some(),
+    );
+
+    let bind_addr = std::env::var("RUST_SIGNER_HTTP_BIND").unwrap_or_else(|_| "0.0.0.0:8789".to_string());
     let token = std::env::var("SIGNER_SERVICE_TOKEN").unwrap_or_default();
     let self_test_image_url = std::env::var("C2PA_SIGNER_SELF_TEST_IMAGE_URL")
         .unwrap_or_else(|_| DEFAULT_SELF_TEST_IMAGE_URL.clone());
@@ -857,6 +866,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signer = Arc::new(resolve_signer_material()?);
     let cert_policy_config = load_cert_policy_config()?;
     let cert_policy_status = Arc::new(evaluate_cert_policy(&signer, &cert_policy_config)?);
+    eprintln!(
+        "rust-http-signer cert policy status: pass={}, enforced={}, summary={}",
+        cert_policy_status.pass,
+        cert_policy_config.enforced,
+        cert_policy_status.summary
+    );
     if cert_policy_config.enforced && !cert_policy_status.pass {
         return Err(format!(
             "Startup blocked by cert policy: {}",
