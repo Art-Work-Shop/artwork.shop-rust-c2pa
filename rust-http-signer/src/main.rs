@@ -2076,9 +2076,20 @@ mod tests {
         }
     }
 
+    fn fixture_path(path: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(path)
+            .to_string_lossy()
+            .to_string()
+    }
+
     fn fixture_json(path: &str) -> Value {
-        let text = std::fs::read_to_string(path).expect("fixture should load");
+        let text = std::fs::read_to_string(fixture_path(path)).expect("fixture should load");
         serde_json::from_str::<Value>(&text).expect("fixture must be valid json")
+    }
+
+    fn fixture_bytes(path: &str) -> Vec<u8> {
+        std::fs::read(fixture_path(path)).expect("fixture should load")
     }
 
     fn generated_signer_material() -> SignerMaterial {
@@ -2116,36 +2127,19 @@ mod tests {
     }
 
     fn minimal_valid_webp_bytes() -> Vec<u8> {
-        STANDARD
-            .decode("UklGRiIAAABXRUJQVlA4TAYAAAAvAAAAAAfQ//73v/+BiOh/AAA=")
-            .expect("embedded webp fixture must decode")
+        fixture_bytes("fixtures/samples/test_xmp.webp")
     }
 
     fn minimal_valid_svg_bytes() -> Vec<u8> {
-                br##"<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120" viewBox="0 0 320 120">
-    <rect width="320" height="120" fill="#ffffff"/>
-    <text x="24" y="68" font-size="28" font-family="sans-serif" fill="#111111">Look inside sample</text>
-</svg>"##
-            .to_vec()
+        fixture_bytes("fixtures/samples/artworkshop-small.svg")
     }
 
     fn minimal_valid_mp4_bytes() -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&24u32.to_be_bytes());
-        bytes.extend_from_slice(b"ftyp");
-        bytes.extend_from_slice(b"isom");
-        bytes.extend_from_slice(&0u32.to_be_bytes());
-        bytes.extend_from_slice(b"isomiso2");
-        bytes.extend_from_slice(&12u32.to_be_bytes());
-        bytes.extend_from_slice(b"mdat");
-        bytes.extend_from_slice(&[0u8; 4]);
-        bytes
+        fixture_bytes("fixtures/samples/legacy.mp4")
     }
 
     fn minimal_valid_mp3_bytes() -> Vec<u8> {
-        vec![
-            0xff, 0xfb, 0x90, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ]
+        fixture_bytes("fixtures/samples/sample1.mp3")
     }
 
     fn verify_context() -> c2pa::Context {
