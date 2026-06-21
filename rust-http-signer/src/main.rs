@@ -1794,14 +1794,15 @@ async fn sign(
     let signed_bytes = sign_image(&source_bytes, source_mime, &manifest_definition, &state.signer)?;
     let verify = verify_signed_bytes(&signed_bytes, source_mime)?;
     let signed_sha = sha256_hex(&signed_bytes);
+    let ignore_cert_profile = read_env_bool("C2PA_SIGNER_SELF_VERIFY_IGNORE_CERT_PROFILE", false);
 
-    let gate_mode = if state.config.fail_open_post_sign_verify {
+    let gate_mode = if state.config.fail_open_post_sign_verify || ignore_cert_profile {
         "report_only"
     } else {
         "enforced"
     };
 
-    if !state.config.fail_open_post_sign_verify && verify.validation_state == "Invalid" {
+    if gate_mode == "enforced" && verify.validation_state == "Invalid" {
         let body = Json(ErrorResponse {
             success: false,
             message: format!(
