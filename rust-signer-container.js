@@ -22,6 +22,8 @@ import { Container } from '@cloudflare/containers';
 const CONTAINER_PORT = 8789;
 
 export class RustSignerContainerV2 extends Container {
+    sleepAfter = '1m';
+
     /**
      * The container's default port binding.
      * Requests forwarded via fetch() are routed to this port inside the container.
